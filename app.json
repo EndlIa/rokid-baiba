@@ -1,0 +1,11 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/scenarios/scenarios",
+    "pages/steps/steps",
+    "pages/capture/capture"
+  ],
+  "permissions": [
+    "CAMERA"
+  ]
+}
