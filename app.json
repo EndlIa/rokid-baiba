@@ -3,9 +3,11 @@
     "pages/index/index",
     "pages/scenarios/scenarios",
     "pages/steps/steps",
-    "pages/capture/capture"
+    "pages/capture/capture",
+    "pages/probe/probe"
   ],
   "permissions": [
-    "CAMERA"
+    "CAMERA",
+    "RECORD_AUDIO"
   ]
 }

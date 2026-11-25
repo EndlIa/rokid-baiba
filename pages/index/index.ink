@@ -7,6 +7,7 @@
 <script setup>
 import wx from 'wx'
 import { appInfo } from '../../utils/scenarioData.js'
+import { probeStore } from '../../utils/probeStore.js'
 
 export default {
   data: {
@@ -14,8 +15,9 @@ export default {
     subtitle: appInfo.subtitle,
     description: appInfo.description,
     selectedIdx: 0,
-    actions: ['organize', 'scenarios', 'capture'],
-    boundaryHint: ''
+    actions: ['organize', 'scenarios', 'probe'],
+    boundaryHint: '',
+    probeNote: ''
   },
 
   onLoad() {
@@ -24,7 +26,7 @@ export default {
 
   onShow() {
     this._armedAt = Date.now()
-    this.setData({ boundaryHint: '' })
+    this.setData({ boundaryHint: '', probeNote: probeStore.note })
   },
 
   onKeyDown(event) {
@@ -75,8 +77,8 @@ export default {
       this.onStartOrganize()
     } else if (action === 'scenarios') {
       this.onShowScenarios()
-    } else if (action === 'capture') {
-      this.onCaptureTest()
+    } else if (action === 'probe') {
+      this.onProbe()
     }
   },
 
@@ -92,6 +94,10 @@ export default {
     wx.navigateTo({ url: '/pages/capture/capture' })
   },
 
+  onProbe() {
+    wx.navigateTo({ url: '/pages/probe/probe' })
+  },
+
   onTapOrganize() {
     this.setData({ selectedIdx: 0 })
     this.onStartOrganize()
@@ -100,6 +106,11 @@ export default {
   onTapScenarios() {
     this.setData({ selectedIdx: 1 })
     this.onShowScenarios()
+  },
+
+  onTapProbe() {
+    this.setData({ selectedIdx: 2 })
+    this.onProbe()
   }
 }
 </script>
@@ -131,10 +142,16 @@ export default {
         </view>
         <text class="btn-label {{selectedIdx === 1 ? 'btn-label-active' : ''}}">示例场景</text>
       </view>
+      <view class="btn-wrap" bindtap="onTapProbe">
+        <view class="btn-marker">
+          <text class="marker-text" ink:if="{{selectedIdx === 2}}">●</text>
+        </view>
+        <text class="btn-label {{selectedIdx === 2 ? 'btn-label-active' : ''}}">自检</text>
+      </view>
     </view>
 
     <view class="hint-bar">
-      <text class="hint-text">{{boundaryHint || '滑动切换 · 单击确认 · 双击返回'}}</text>
+      <text class="hint-text">{{probeNote || boundaryHint || '滑动切换 · 单击确认 · 双击返回'}}</text>
     </view>
   </view>
 </page>
