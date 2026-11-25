@@ -153,7 +153,9 @@ export async function analyzeDesk(options) {
   }
 
   const goal = goalById(options.goalId)
+  const report = typeof options.onStage === 'function' ? options.onStage : function () {}
 
+  report('检查模型')
   const availability = await withTimeout(
     LanguageModel.availability(),
     AVAILABILITY_TIMEOUT_MS,
@@ -163,6 +165,7 @@ export async function analyzeDesk(options) {
     throw new Error('语言模型不可用')
   }
 
+  report('初始化模型')
   const session = await withTimeout(
     LanguageModel.create({
       initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }]
@@ -173,6 +176,7 @@ export async function analyzeDesk(options) {
 
   let raw = ''
   try {
+    report('模型分析照片')
     raw = await withTimeout(
       session.prompt([
         {
@@ -192,6 +196,7 @@ export async function analyzeDesk(options) {
     } catch (e) {}
   }
 
+  report('解析整理计划')
   const parsed = parsePlanText(raw)
   if (!parsed) {
     const error = new Error('返回内容不是有效 JSON')

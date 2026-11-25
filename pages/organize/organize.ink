@@ -57,6 +57,7 @@ export default {
     title: '',
     description: '',
     errorMsg: '',
+    errorStage: '',
     hint: '',
     primaryLabel: '就用这个',
     showSecondary: false,
@@ -110,7 +111,7 @@ export default {
       event.preventDefault()
       this._primary()
     } else if (code === 'Backspace') {
-      this._back()
+      // 保留宿主默认返回，避免一次双击触发两次返回。
     } else if (
       code === 'ArrowUp' ||
       code === 'ArrowLeft' ||
@@ -195,13 +196,11 @@ export default {
   async _startCapture() {
     if (this._busy) return
     this._busy = true
+    this._stage = '创建相机'
+    console.log('[摆摆] 开始拍照流程')
     try {
       if (!this._cameraCtx) {
-        try {
-          this._cameraCtx = wx.media.createCameraContext()
-        } catch (e) {
-          this._cameraCtx = null
-        }
+        this._cameraCtx = wx.media.createCameraContext()
       }
       if (!this._cameraCtx) {
         this._fail('这个设备没有可用摄像头')
@@ -212,6 +211,8 @@ export default {
       this._updateChrome()
 
       // 必须在交互上下文里同步发起
+      this._stage = '调用相机拍照'
+      console.log('[摆摆] ' + this._stage)
       const pending = this._cameraCtx.takePhoto({})
       const photo = await raceTimeout(pending, PHOTO_TIMEOUT_MS, '拍照')
 
@@ -221,19 +222,31 @@ export default {
         return
       }
 
+      this._stage = '编码照片'
+      console.log('[摆摆] 拍照返回，图像字节数=' + photo.data.byteLength + '，类型=' + (photo.mimeType || '未提供'))
       const mimeType = photo.mimeType || 'image/jpeg'
       this._dataUrl = 'data:' + mimeType + ';base64,' + bytesToBase64(photo.data)
 
       this.setData({ phase: 'analyzing', statusText: '正在分析桌面，请稍候' })
       this._updateChrome()
 
-      const result = await analyzeDesk({ dataUrl: this._dataUrl, goalId: this.data.goalId })
+      this._stage = '准备模型分析'
+      const result = await analyzeDesk({
+        dataUrl: this._dataUrl,
+        goalId: this.data.goalId,
+        onStage: (stage) => {
+          this._stage = stage
+          console.log('[摆摆] ' + stage)
+        }
+      })
       if (this._disposed) return
       this._showPlan(result.plan)
     } catch (error) {
       if (this._disposed) return
+      console.error('[摆摆] 失败阶段=' + this._stage + '，错误=' + this._describe(error))
       this._fail(this._describe(error))
     } finally {
+      this._dataUrl = ''
       this._busy = false
     }
   },
@@ -245,7 +258,7 @@ export default {
   },
 
   _fail(message) {
-    this.setData({ phase: 'error', errorMsg: message, statusText: '' })
+    this.setData({ phase: 'error', errorMsg: message, errorStage: this._stage || '准备整理', statusText: '' })
     this._updateChrome()
   },
 
@@ -297,7 +310,7 @@ export default {
       hint = '滑动选择 · 单击确认'
       primaryLabel = '就用这个'
     } else if (phase === 'ready') {
-      hint = '单击拍照 · 双击换个目标'
+      hint = '单击拍照 · 双击返回'
       primaryLabel = '拍照'
     } else if (phase === 'capturing') {
       hint = '正在拍照'
@@ -307,7 +320,7 @@ export default {
       primaryLabel = '请稍候'
     } else if (phase === 'guiding') {
       const isLast = this.data.stepIdx >= this.data.stepTotal - 1
-      topRight = (this.data.stepIdx + 1) + '/' + this.data.stepTotal
+      topRight = this.data.isExample ? '示例' : (this.data.stepIdx + 1) + '/' + this.data.stepTotal
       hint = isLast ? '单击完成 · 滑动回看' : '单击下一步 · 滑动回看'
       primaryLabel = isLast ? '完成' : '下一步'
       showSecondary = this.data.stepIdx > 0
@@ -391,6 +404,7 @@ export default {
 
     <view class="body" ink:if="{{phase === 'error'}}">
       <text class="hero">没能完成</text>
+      <text class="desc">失败环节：{{errorStage}}</text>
       <text class="desc">{{errorMsg}}</text>
     </view>
 
