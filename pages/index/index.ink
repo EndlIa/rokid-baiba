@@ -7,26 +7,31 @@
 <script setup>
 import wx from 'wx'
 import { appInfo } from '../../utils/scenarioData.js'
-import { probeStore } from '../../utils/probeStore.js'
+
+const ACTIONS = [
+  { key: 'organize', label: '开始整理' },
+  { key: 'example', label: '查看示例' }
+]
 
 export default {
   data: {
     appName: appInfo.name,
     subtitle: appInfo.subtitle,
     description: appInfo.description,
+    actions: ACTIONS,
     selectedIdx: 0,
-    actions: ['organize', 'scenarios', 'probe'],
-    boundaryHint: '',
-    probeNote: ''
+    boundaryHint: ''
   },
 
   onLoad() {
     this._armedAt = Date.now()
+    this._lastDirTime = 0
+    this._lastDelta = 0
   },
 
   onShow() {
     this._armedAt = Date.now()
-    this.setData({ boundaryHint: '', probeNote: probeStore.note })
+    this.setData({ boundaryHint: '' })
   },
 
   onKeyDown(event) {
@@ -46,56 +51,47 @@ export default {
       event.preventDefault()
       this._activate()
     } else if (code === 'Backspace') {
-      // 根页面：不拦截，主机默认行为会关闭应用
-    } else if (code === 'ArrowUp' || code === 'ArrowLeft') {
-      event.preventDefault()
-    } else if (code === 'ArrowDown' || code === 'ArrowRight') {
+      // 根页面：不拦截，交给主机默认行为关闭应用
+    } else if (
+      code === 'ArrowUp' ||
+      code === 'ArrowLeft' ||
+      code === 'ArrowDown' ||
+      code === 'ArrowRight'
+    ) {
       event.preventDefault()
     }
   },
 
   _moveSelection(delta) {
-    const now = Date.now()
-    if (this._lastDirTime && now - this._lastDirTime < 1200 && this._lastDelta === delta) return
-    this._lastDirTime = now
+    const stamp = Date.now()
+    if (this._lastDirTime && stamp - this._lastDirTime < 1000 && this._lastDelta === delta) return
+    this._lastDirTime = stamp
     this._lastDelta = delta
 
-    const list = this.data.actions
-    const cur = this.data.selectedIdx
-    const next = Math.min(list.length - 1, Math.max(0, cur + delta))
-    if (next === cur) {
-      const hint = delta < 0 ? '已经是第一个了' : '已经是最后一个了'
-      this.setData({ boundaryHint: hint })
+    const next = Math.min(ACTIONS.length - 1, Math.max(0, this.data.selectedIdx + delta))
+    if (next === this.data.selectedIdx) {
+      this.setData({ boundaryHint: delta < 0 ? '已经是第一个了' : '已经是最后一个了' })
       return
     }
     this.setData({ selectedIdx: next, boundaryHint: '' })
   },
 
   _activate() {
-    const action = this.data.actions[this.data.selectedIdx]
-    if (action === 'organize') {
+    const action = ACTIONS[this.data.selectedIdx]
+    if (!action) return
+    if (action.key === 'organize') {
       this.onStartOrganize()
-    } else if (action === 'scenarios') {
-      this.onShowScenarios()
-    } else if (action === 'probe') {
-      this.onProbe()
+    } else if (action.key === 'example') {
+      this.onShowExample()
     }
   },
 
   onStartOrganize() {
-    wx.navigateTo({ url: '/pages/steps/steps?scenario=desk' })
+    wx.navigateTo({ url: '/pages/organize/organize' })
   },
 
-  onShowScenarios() {
-    wx.navigateTo({ url: '/pages/scenarios/scenarios' })
-  },
-
-  onCaptureTest() {
-    wx.navigateTo({ url: '/pages/capture/capture' })
-  },
-
-  onProbe() {
-    wx.navigateTo({ url: '/pages/probe/probe' })
+  onShowExample() {
+    wx.navigateTo({ url: '/pages/organize/organize?mode=example' })
   },
 
   onTapOrganize() {
@@ -103,14 +99,9 @@ export default {
     this.onStartOrganize()
   },
 
-  onTapScenarios() {
+  onTapExample() {
     this.setData({ selectedIdx: 1 })
-    this.onShowScenarios()
-  },
-
-  onTapProbe() {
-    this.setData({ selectedIdx: 2 })
-    this.onProbe()
+    this.onShowExample()
   }
 }
 </script>
@@ -124,9 +115,6 @@ export default {
     <view class="body">
       <text class="subtitle">{{subtitle}}</text>
       <text class="description">{{description}}</text>
-      <view class="chip-row">
-        <text class="chip">待接入 · 视觉识别</text>
-      </view>
     </view>
 
     <view class="action-band">
@@ -136,22 +124,16 @@ export default {
         </view>
         <text class="btn-label {{selectedIdx === 0 ? 'btn-label-active' : ''}}">开始整理</text>
       </view>
-      <view class="btn-wrap" bindtap="onTapScenarios">
+      <view class="btn-wrap" bindtap="onTapExample">
         <view class="btn-marker">
           <text class="marker-text" ink:if="{{selectedIdx === 1}}">●</text>
         </view>
-        <text class="btn-label {{selectedIdx === 1 ? 'btn-label-active' : ''}}">示例场景</text>
-      </view>
-      <view class="btn-wrap" bindtap="onTapProbe">
-        <view class="btn-marker">
-          <text class="marker-text" ink:if="{{selectedIdx === 2}}">●</text>
-        </view>
-        <text class="btn-label {{selectedIdx === 2 ? 'btn-label-active' : ''}}">自检</text>
+        <text class="btn-label {{selectedIdx === 1 ? 'btn-label-active' : ''}}">查看示例</text>
       </view>
     </view>
 
     <view class="hint-bar">
-      <text class="hint-text">{{probeNote || boundaryHint || '滑动切换 · 单击确认 · 双击返回'}}</text>
+      <text class="hint-text">{{boundaryHint || '滑动切换 · 单击确认 · 双击返回'}}</text>
     </view>
   </view>
 </page>
@@ -178,7 +160,7 @@ export default {
 .topbar-title {
   font-size: 16px;
   font-weight: 500;
-  color: rgba(64,255,94,0.72);
+  color: rgba(64, 255, 94, 0.72);
 }
 
 .body {
@@ -193,7 +175,7 @@ export default {
 .subtitle {
   font-size: 14px;
   font-weight: 400;
-  color: rgba(64,255,94,0.72);
+  color: rgba(64, 255, 94, 0.72);
   line-height: 19px;
   margin-bottom: 8px;
 }
@@ -201,23 +183,8 @@ export default {
 .description {
   font-size: 12px;
   font-weight: 400;
-  color: rgba(64,255,94,0.48);
+  color: rgba(64, 255, 94, 0.48);
   line-height: 17px;
-  margin-bottom: 12px;
-}
-
-.chip-row {
-  display: flex;
-  flex-direction: row;
-}
-
-.chip {
-  font-size: 10px;
-  font-weight: 400;
-  color: rgba(64,255,94,0.48);
-  border: 1px solid rgba(64,255,94,0.24);
-  border-radius: 4px;
-  padding: 2px 8px;
 }
 
 .action-band {
@@ -237,7 +204,7 @@ export default {
   align-items: center;
   min-height: 32px;
   padding: 0 12px;
-  border: 1px solid rgba(64,255,94,0.24);
+  border: 1px solid rgba(64, 255, 94, 0.24);
   border-radius: 4px;
 }
 
@@ -257,7 +224,7 @@ export default {
 .btn-label {
   font-size: 11px;
   font-weight: 500;
-  color: rgba(64,255,94,0.48);
+  color: rgba(64, 255, 94, 0.48);
 }
 
 .btn-label-active {
@@ -275,6 +242,6 @@ export default {
 .hint-text {
   font-size: 10px;
   font-weight: 400;
-  color: rgba(64,255,94,0.48);
+  color: rgba(64, 255, 94, 0.48);
 }
 </style>

@@ -1,13 +1,9 @@
 {
   "pages": [
     "pages/index/index",
-    "pages/scenarios/scenarios",
-    "pages/steps/steps",
-    "pages/capture/capture",
-    "pages/probe/probe"
+    "pages/organize/organize"
   ],
   "permissions": [
-    "CAMERA",
-    "RECORD_AUDIO"
+    "CAMERA"
   ]
 }
