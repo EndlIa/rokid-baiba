@@ -211,9 +211,11 @@ export default {
       this._updateChrome()
 
       // 必须在交互上下文里同步发起
-      this._stage = '调用相机拍照'
+      this._stage = '发起拍照（同步）'
       console.log('[摆摆] ' + this._stage)
-      const pending = this._cameraCtx.takePhoto({})
+      const pending = this._cameraCtx.takePhoto({ quality: 'high', mode: 'default', enableSystemPreview: true })
+      this._stage = '等待相机返回（异步）'
+      console.log('[摆摆] ' + this._stage)
       const photo = await raceTimeout(pending, PHOTO_TIMEOUT_MS, '拍照')
 
       if (this._disposed) return
