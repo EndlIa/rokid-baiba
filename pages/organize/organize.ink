@@ -7,61 +7,35 @@
 <script setup>
 import wx from 'wx'
 import { GOALS, EXAMPLE_PLAN, analyzeDesk } from '../../utils/organizer.js'
+import { capturePhoto } from '../../utils/camera.js'
+import {
+  PHASE,
+  intentFor,
+  chromeFor,
+  stepAfterAdvance,
+  clampStep,
+  moveIndex
+} from '../../utils/flow.js'
 
 const ARM_MS = 800
 const REPEAT_MS = 1000
-const PHOTO_TIMEOUT_MS = 15000
-
-function bytesToBase64(buffer) {
-  const bytes = new Uint8Array(buffer)
-  const CHUNK = 4096
-  let binary = ''
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    const end = Math.min(i + CHUNK, bytes.length)
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, end))
-  }
-  return window.btoa(binary)
-}
-
-function raceTimeout(promise, ms, label) {
-  let timer = null
-  const guard = new Promise((resolve, reject) => {
-    timer = setTimeout(function () {
-      reject(new Error(label + '超时'))
-    }, ms)
-  })
-  return Promise.race([promise, guard]).then(
-    function (value) {
-      if (timer) clearTimeout(timer)
-      return value
-    },
-    function (error) {
-      if (timer) clearTimeout(timer)
-      throw error
-    }
-  )
-}
 
 export default {
   data: {
-    mode: 'real',
     isExample: false,
-    phase: 'goal',
+    phase: PHASE.GOAL,
     goals: GOALS,
     goalIdx: 0,
-    goalId: GOALS[0].id,
-    goalName: GOALS[0].name,
-    statusText: '',
     stepIdx: 0,
     stepTotal: 0,
     title: '',
     description: '',
-    errorMsg: '',
     errorStage: '',
+    errorMsg: '',
     hint: '',
-    primaryLabel: '就用这个',
-    showSecondary: false,
-    topRight: ''
+    primaryLabel: '',
+    topRight: '',
+    showSecondary: false
   },
 
   onLoad(query) {
@@ -70,17 +44,22 @@ export default {
     this._disposed = false
     this._cameraCtx = null
     this._plan = null
-    this._dataUrl = ''
     this._lastDirTime = 0
     this._lastDelta = 0
 
-    const isExample = query && query.mode === 'example'
-    this.setData({ mode: isExample ? 'example' : 'real', isExample: isExample })
+    const isExample = !!(query && query.mode === 'example')
+    this._state = {
+      phase: PHASE.GOAL,
+      stepIdx: 0,
+      stepTotal: 0,
+      isExample: isExample
+    }
 
     if (isExample) {
       this._showPlan(EXAMPLE_PLAN)
     } else {
-      this._updateChrome()
+      this.setData({ isExample: isExample })
+      this._render()
     }
   },
 
@@ -91,7 +70,7 @@ export default {
   onUnload() {
     this._disposed = true
     this._cameraCtx = null
-    this._dataUrl = ''
+    this._plan = null
   },
 
   onKeyDown(event) {
@@ -110,8 +89,6 @@ export default {
     if (code === 'Enter') {
       event.preventDefault()
       this._primary()
-    } else if (code === 'Backspace') {
-      // 保留宿主默认返回，避免一次双击触发两次返回。
     } else if (
       code === 'ArrowUp' ||
       code === 'ArrowLeft' ||
@@ -119,6 +96,32 @@ export default {
       code === 'ArrowRight'
     ) {
       event.preventDefault()
+    }
+    // Backspace 不做拦截，保留宿主默认返回
+  },
+
+  // 段落状态和界面文案一起更新，避免读到旧的 data
+  _render(patch) {
+    this._state = Object.assign({}, this._state, patch || {})
+    const chrome = chromeFor(this._state)
+    const data = Object.assign({}, patch || {}, chrome)
+    data.phase = this._state.phase
+    data.isExample = this._state.isExample
+    this.setData(data)
+  },
+
+  _primary() {
+    const intent = intentFor(this.data.phase)
+    if (intent === 'confirm') {
+      this._render({ phase: PHASE.READY })
+    } else if (intent === 'capture') {
+      this._startCapture()
+    } else if (intent === 'advance') {
+      this._advanceStep()
+    } else if (intent === 'exit') {
+      wx.navigateBack()
+    } else if (intent === 'retry') {
+      this._render({ phase: PHASE.READY, errorStage: '', errorMsg: '' })
     }
   },
 
@@ -129,220 +132,102 @@ export default {
     this._lastDelta = delta
 
     const phase = this.data.phase
-    if (phase === 'goal') {
-      this._moveGoal(delta)
-    } else if (phase === 'guiding') {
+    if (phase === PHASE.GOAL) {
+      const next = moveIndex(this.data.goalIdx, delta, GOALS.length)
+      if (next !== this.data.goalIdx) this.setData({ goalIdx: next })
+    } else if (phase === PHASE.GUIDING) {
       this._moveStep(delta)
     }
   },
 
-  _moveGoal(delta) {
-    const next = Math.min(GOALS.length - 1, Math.max(0, this.data.goalIdx + delta))
-    if (next === this.data.goalIdx) return
-    const goal = GOALS[next]
-    this.setData({ goalIdx: next, goalId: goal.id, goalName: goal.name })
-  },
-
   _moveStep(delta) {
     if (!this._plan) return
-    const target = this.data.stepIdx + delta
-    if (target < 0 || target >= this.data.stepTotal) return
+    const target = moveIndex(this.data.stepIdx, delta, this.data.stepTotal)
+    if (target === this.data.stepIdx) return
     this._setStep(target)
   },
 
-  _primary() {
-    const phase = this.data.phase
-    if (phase === 'goal') {
-      this._confirmGoal()
-    } else if (phase === 'ready') {
-      this._startCapture()
-    } else if (phase === 'guiding') {
-      this._advanceStep()
-    } else if (phase === 'done') {
-      wx.navigateBack()
-    } else if (phase === 'error') {
-      this._retry()
-    }
-  },
-
-  _back() {
-    const phase = this.data.phase
-    if (phase === 'goal') {
-      // 初始状态，交给主机默认返回行为
-      return
-    }
-    if (phase === 'ready') {
-      this.setData({ phase: 'goal' })
-      this._updateChrome()
-      return
-    }
-    if (phase === 'capturing' || phase === 'analyzing') {
-      // 请求进行中，不打断
-      return
-    }
-    wx.navigateBack()
-  },
-
-  _confirmGoal() {
-    this.setData({ phase: 'ready' })
-    this._updateChrome()
-  },
-
-  _retry() {
-    this.setData({ phase: 'ready', errorMsg: '' })
-    this._updateChrome()
-  },
-
-  async _startCapture() {
-    if (this._busy) return
-    this._busy = true
-    this._stage = '创建相机'
-    console.log('[摆摆] 开始拍照流程')
-    try {
-      if (!this._cameraCtx) {
-        this._cameraCtx = wx.media.createCameraContext()
-      }
-      if (!this._cameraCtx) {
-        this._fail('这个设备没有可用摄像头')
-        return
-      }
-
-      this.setData({ phase: 'capturing', statusText: '正在拍照' })
-      this._updateChrome()
-
-      // 必须在交互上下文里同步发起
-      this._stage = '发起拍照（同步）'
-      console.log('[摆摆] ' + this._stage)
-      const pending = this._cameraCtx.takePhoto({ quality: 'high', mode: 'default', enableSystemPreview: true })
-      this._stage = '等待相机返回（异步）'
-      console.log('[摆摆] ' + this._stage)
-      const photo = await raceTimeout(pending, PHOTO_TIMEOUT_MS, '拍照')
-
-      if (this._disposed) return
-      if (!photo || !photo.data) {
-        this._fail('拍照没有取到图像数据')
-        return
-      }
-
-      this._stage = '编码照片'
-      console.log('[摆摆] 拍照返回，图像字节数=' + photo.data.byteLength + '，类型=' + (photo.mimeType || '未提供'))
-      const mimeType = photo.mimeType || 'image/jpeg'
-      this._dataUrl = 'data:' + mimeType + ';base64,' + bytesToBase64(photo.data)
-
-      this.setData({ phase: 'analyzing', statusText: '正在分析桌面，请稍候' })
-      this._updateChrome()
-
-      this._stage = '准备模型分析'
-      const result = await analyzeDesk({
-        dataUrl: this._dataUrl,
-        goalId: this.data.goalId,
-        onStage: (stage) => {
-          this._stage = stage
-          console.log('[摆摆] ' + stage)
-        }
-      })
-      if (this._disposed) return
-      this._showPlan(result.plan)
-    } catch (error) {
-      if (this._disposed) return
-      console.error('[摆摆] 失败阶段=' + this._stage + '，错误=' + this._describe(error))
-      this._fail(this._describe(error))
-    } finally {
-      this._dataUrl = ''
-      this._busy = false
-    }
-  },
-
-  _describe(error) {
-    if (!error) return '未知错误'
-    if (error.message) return error.message
-    return String(error)
-  },
-
-  _fail(message) {
-    this.setData({ phase: 'error', errorMsg: message, errorStage: this._stage || '准备整理', statusText: '' })
-    this._updateChrome()
-  },
-
-  _showPlan(plan) {
-    if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) {
-      this._fail('没有拿到可用的整理步骤')
-      return
-    }
-    this._plan = plan
-    const first = plan.steps[0]
-    this.setData({
-      phase: 'guiding',
-      stepIdx: 0,
-      stepTotal: plan.steps.length,
-      title: first.title,
-      description: first.description,
-      errorMsg: ''
-    })
-    this._updateChrome()
-  },
-
   _setStep(index) {
-    const plan = this._plan
-    if (!plan) return
-    const clamped = Math.min(plan.steps.length - 1, Math.max(0, index))
-    const step = plan.steps[clamped]
-    this.setData({ stepIdx: clamped, title: step.title, description: step.description })
-    this._updateChrome()
+    if (!this._plan) return
+    const position = clampStep(index, this.data.stepTotal)
+    const step = this._plan.steps[position]
+    this._render({
+      stepIdx: position,
+      title: step.title,
+      description: step.description
+    })
   },
 
   _advanceStep() {
-    const next = this.data.stepIdx + 1
-    if (next >= this.data.stepTotal) {
-      this.setData({ phase: 'done' })
-      this._updateChrome()
+    const next = stepAfterAdvance(this.data.stepIdx, this.data.stepTotal)
+    if (next < 0) {
+      this._render({ phase: PHASE.DONE })
       return
     }
     this._setStep(next)
   },
 
-  _updateChrome() {
-    const phase = this.data.phase
-    let hint = ''
-    let primaryLabel = ''
-    let showSecondary = false
-    let topRight = this.data.isExample ? '示例' : ''
+  async _startCapture() {
+    if (this._busy) return
+    this._busy = true
+    this._stage = '打开相机'
+    this._render({ phase: PHASE.CAPTURING, errorStage: '', errorMsg: '' })
+    try {
+      if (!this._cameraCtx) {
+        this._cameraCtx = wx.media.createCameraContext()
+      }
+      const reportStage = (stage) => { this._stage = stage }
+      const photo = await capturePhoto(this._cameraCtx, reportStage)
+      if (this._disposed) return
 
-    if (phase === 'goal') {
-      hint = '滑动选择 · 单击确认'
-      primaryLabel = '就用这个'
-    } else if (phase === 'ready') {
-      hint = '单击拍照 · 双击返回'
-      primaryLabel = '拍照'
-    } else if (phase === 'capturing') {
-      hint = '正在拍照'
-      primaryLabel = '请稍候'
-    } else if (phase === 'analyzing') {
-      hint = '正在分析，请稍候'
-      primaryLabel = '请稍候'
-    } else if (phase === 'guiding') {
-      const isLast = this.data.stepIdx >= this.data.stepTotal - 1
-      topRight = this.data.isExample ? '示例' : (this.data.stepIdx + 1) + '/' + this.data.stepTotal
-      hint = isLast ? '单击完成 · 滑动回看' : '单击下一步 · 滑动回看'
-      primaryLabel = isLast ? '完成' : '下一步'
-      showSecondary = this.data.stepIdx > 0
-    } else if (phase === 'done') {
-      hint = '单击返回'
-      primaryLabel = '返回'
-    } else if (phase === 'error') {
-      hint = '单击重试'
-      primaryLabel = '重试'
+      this._render({ phase: PHASE.ANALYZING })
+      const plan = await analyzeDesk({
+        dataUrl: photo.dataUrl,
+        goalId: GOALS[this.data.goalIdx].id,
+        onStage: reportStage
+      })
+      if (this._disposed) return
+      this._showPlan(plan)
+    } catch (error) {
+      if (this._disposed) return
+      this._fail(error)
+    } finally {
+      this._busy = false
     }
+  },
 
-    this.setData({ hint: hint, primaryLabel: primaryLabel, showSecondary: showSecondary, topRight: topRight })
+  _showPlan(plan) {
+    if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) {
+      this._fail({ stage: '解析结果', message: '没有拿到可用的整理步骤' })
+      return
+    }
+    this._plan = plan
+    const first = plan.steps[0]
+    this._state.stepTotal = plan.steps.length
+    this._render({
+      phase: PHASE.GUIDING,
+      stepIdx: 0,
+      stepTotal: plan.steps.length,
+      title: first.title,
+      description: first.description,
+      errorStage: '',
+      errorMsg: ''
+    })
+  },
+
+  _fail(error) {
+    const stage = (error && error.stage) || this._stage || '整理流程'
+    const message = (error && error.message) || String(error)
+    console.error('[摆摆] ' + stage + '：' + message)
+    this._render({ phase: PHASE.ERROR, errorStage: stage, errorMsg: message })
   },
 
   onTapGoal(event) {
     const dataset = event.currentTarget && event.currentTarget.dataset
-    const idx = dataset ? dataset.idx : 0
-    const goal = GOALS[idx] || GOALS[0]
-    this.setData({ goalIdx: idx, goalId: goal.id, goalName: goal.name })
-    this._confirmGoal()
+    const index = dataset ? Number(dataset.idx) : 0
+    const goalIdx = clampStep(index, GOALS.length)
+    this.setData({ goalIdx: goalIdx })
+    this._render({ phase: PHASE.READY })
   },
 
   onTapPrimary() {
@@ -378,18 +263,18 @@ export default {
     </view>
 
     <view class="body" ink:if="{{phase === 'ready'}}">
-      <text class="prompt">{{goalName}}</text>
+      <text class="prompt">{{goals[goalIdx].name}}</text>
       <text class="hero">看向书桌</text>
       <text class="desc">把桌面整体放进画面，单击拍照</text>
     </view>
 
     <view class="body" ink:if="{{phase === 'capturing'}}">
-      <text class="hero">{{statusText}}</text>
+      <text class="hero">正在拍照</text>
       <text class="desc">保持不动，很快就好</text>
     </view>
 
     <view class="body" ink:if="{{phase === 'analyzing'}}">
-      <text class="hero">{{statusText}}</text>
+      <text class="hero">正在分析桌面</text>
       <text class="desc">正在看照片里有什么，稍等一下</text>
     </view>
 

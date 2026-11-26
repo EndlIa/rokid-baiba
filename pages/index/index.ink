@@ -6,7 +6,7 @@
 
 <script setup>
 import wx from 'wx'
-import { appInfo } from '../../utils/scenarioData.js'
+import { appInfo } from '../../utils/appInfo.js'
 
 const ACTIONS = [
   { key: 'organize', label: '开始整理' },

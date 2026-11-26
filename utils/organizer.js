@@ -1,6 +1,4 @@
-// 摆摆 — 桌面分析
-// 只做三件事：组织 prompt、调用 LanguageModel、解析并校验结果
-// 校验不过就抛错，由页面显示失败状态，不做静默兜底
+import { raceTimeout } from './async.js'
 
 export const GOALS = [
   { id: 'work', name: '腾出工作空间', hint: '优先清出能工作学习的区域' },
@@ -20,9 +18,8 @@ export const EXAMPLE_PLAN = {
 
 const MAX_STEPS = 8
 const MIN_STEPS = 1
-
-const ANALYZE_TIMEOUT_MS = 40000
 const AVAILABILITY_TIMEOUT_MS = 8000
+const ANALYZE_TIMEOUT_MS = 40000
 
 const SYSTEM_PROMPT =
   '你是桌面整理助手，只能依据用户给的照片和整理目标给建议。规则：' +
@@ -49,23 +46,10 @@ function buildUserText(goal) {
   )
 }
 
-function withTimeout(promise, ms, label) {
-  let timer = null
-  const guard = new Promise((resolve, reject) => {
-    timer = setTimeout(function () {
-      reject(new Error(label + '超时'))
-    }, ms)
-  })
-  return Promise.race([promise, guard]).then(
-    function (value) {
-      if (timer) clearTimeout(timer)
-      return value
-    },
-    function (error) {
-      if (timer) clearTimeout(timer)
-      throw error
-    }
-  )
+function fail(stage, message) {
+  const error = new Error(message)
+  error.stage = stage
+  return error
 }
 
 // 从模型输出里找出 JSON，容忍前后的多余文字和代码块围栏
@@ -143,41 +127,42 @@ export function validatePlan(parsed) {
 }
 
 // 主入口：dataUrl 为 data:image/...;base64,... 形式
+// 失败时抛出的 error 带 stage 字段，页面直接显示这个阶段
 export async function analyzeDesk(options) {
   const dataUrl = options && options.dataUrl
   if (!dataUrl) {
-    throw new Error('没有可分析的照片')
+    throw fail('准备分析', '没有可分析的照片')
   }
   if (typeof LanguageModel === 'undefined') {
-    throw new Error('当前环境不支持语言模型')
+    throw fail('检查模型', '当前环境不支持语言模型')
   }
 
   const goal = goalById(options.goalId)
   const report = typeof options.onStage === 'function' ? options.onStage : function () {}
 
   report('检查模型')
-  const availability = await withTimeout(
+  const availability = await raceTimeout(
     LanguageModel.availability(),
     AVAILABILITY_TIMEOUT_MS,
-    '模型检查'
+    '检查模型'
   )
   if (availability !== 'available') {
-    throw new Error('语言模型不可用')
+    throw fail('检查模型', '语言模型不可用')
   }
 
   report('初始化模型')
-  const session = await withTimeout(
+  const session = await raceTimeout(
     LanguageModel.create({
       initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }]
     }),
     ANALYZE_TIMEOUT_MS,
-    '模型初始化'
+    '初始化模型'
   )
 
   let raw = ''
   try {
-    report('模型分析照片')
-    raw = await withTimeout(
+    report('分析照片')
+    raw = await raceTimeout(
       session.prompt([
         {
           role: 'user',
@@ -188,7 +173,7 @@ export async function analyzeDesk(options) {
         }
       ]),
       ANALYZE_TIMEOUT_MS,
-      '模型分析'
+      '分析照片'
     )
   } finally {
     try {
@@ -196,20 +181,16 @@ export async function analyzeDesk(options) {
     } catch (e) {}
   }
 
-  report('解析整理计划')
+  report('解析结果')
   const parsed = parsePlanText(raw)
   if (!parsed) {
-    const error = new Error('返回内容不是有效 JSON')
-    error.raw = raw
-    throw error
+    throw fail('解析结果', '模型返回的内容不是有效 JSON')
   }
 
   const checked = validatePlan(parsed)
   if (!checked.ok) {
-    const error = new Error('结果结构不对：' + checked.error)
-    error.raw = raw
-    throw error
+    throw fail('解析结果', '结果结构不对：' + checked.error)
   }
 
-  return { plan: checked.plan, raw: raw }
+  return checked.plan
 }
